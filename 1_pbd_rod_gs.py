@@ -19,7 +19,7 @@ def init_pos():
     for i in edge:
         edge[i] = ti.Vector([i, i + 1])
     for i in range(n):
-        inv_mass[i + 1] = 1.0
+        inv_mass[i] = 1.0
     inv_mass[0] = 0.0
 
 
@@ -49,7 +49,7 @@ def solve_constraints():
         constraint = dis.norm() - rest_len[i]
         gradient = dis.normalized()
         l = -constraint / (invM0 + invM1)
-        if idx0 != 0.0:
+        if invM0 != 0.0:
             pos[idx0] += invM0 * l * gradient
         if invM1 != 0.0:
             pos[idx1] -= invM1 * l * gradient

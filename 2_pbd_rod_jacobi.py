@@ -1,7 +1,7 @@
 import taichi as ti
 ti.init(arch=ti.gpu)
 
-n = 1000
+n = 10
 pos = ti.Vector.field(n=2, dtype=ti.f32, shape=n)
 old_pos = ti.Vector.field(n=2, dtype=ti.f32, shape=n)
 edge = ti.Vector.field(n=2, dtype=ti.i32, shape=n - 1)
@@ -20,7 +20,7 @@ def init_pos():
     for i in edge:
         edge[i] = ti.Vector([i, i + 1])
     for i in range(n):
-        inv_mass[i + 1] = 1.0
+        inv_mass[i] = 1.0
     inv_mass[0] = 0.0
 
 
@@ -53,7 +53,7 @@ def solve_constraints():
         invM0, invM1 = inv_mass[idx0], inv_mass[idx1]
         constraint = (pos[idx0] - pos[idx1]).norm() - rest_len[i]
         l = -constraint / (invM0 + invM1)
-        if idx0 != 0.0:
+        if invM0 != 0.0:
             pos[idx0] += invM0 * l * gradient[2 * i]
         if invM1 != 0.0:
             pos[idx1] += invM1 * l * gradient[2 * i + 1]
