@@ -16,6 +16,9 @@ velocities = ti.Vector.field(2, ti.f32, NV)
 
 rest_len = ti.field(ti.f32, NE)
 
+constraint = ti.field(ti.f32, NE)
+gradient = ti.Vector.field(2, ti.f32, 2 * NE)
+
 @ti.kernel 
 def init_pos():
     step = 1/N * 0.5
@@ -49,19 +52,26 @@ def semi_euler(h: ti.f32):
         old_positions[i] = positions[i]
         positions[i] += h * velocities[i]
 
+@ti.kernel
+def compute_constraint_gradient():
+    for i in range(NE):
+        idx0, idx1  = edge_indices[i] 
+        dis = positions[idx0] - positions[idx1]
+        constraint[i] = dis.norm() - rest_len[i]
+        gradient[2 * i + 0] = dis.normalized()
+        gradient[2 * i + 1] = -dis.normalized()
+
 @ti.kernel 
 def solve_constraints():
     for i in range(NE):
         idx0, idx1  = edge_indices[i] 
         invM0, invM1 = inv_mass[idx0], inv_mass[idx1]
-        dis = positions[idx0] - positions[idx1]
-        constraint = dis.norm() - rest_len[i]
-        gradient = dis.normalized()
-        l = -constraint / (invM0 + invM1)
+        l = -constraint[i] / (invM0 + invM1)
         if invM0 != 0.0:
-            positions[idx0] += invM0 * l * gradient
+            positions[idx0] += invM0 * l * gradient[2 * i + 0]
         if invM1 != 0.0:
-            positions[idx1] -= invM1 * l * gradient
+            positions[idx1] += invM1 * l * gradient[2 * i + 1]
+
 @ti.kernel
 def update_v(h: ti.f32):
     for i in range(NV):
@@ -76,6 +86,7 @@ def collision():
 def update(h, maxIte):
     semi_euler(h)
     for i in range(maxIte):
+        compute_constraint_gradient()
         solve_constraints()
         collision()
     update_v(h)
