@@ -8,6 +8,7 @@ NV = (N+1)**2
 NE = (N+1) * N * 2
 positions = ti.Vector.field(2, ti.f32, NV)
 old_positions = ti.Vector.field(2, ti.f32, NV)
+pre_positions = ti.Vector.field(2, ti.f32, NV)
 edge_indices = ti.Vector.field(2, ti.i32, NE)
 
 inv_mass =ti.field(ti.f32, NV)
@@ -17,6 +18,8 @@ rest_len = ti.field(ti.f32, NE)
 
 constraint = ti.field(ti.f32, NE)
 gradient = ti.Vector.field(2, ti.f32, 2 * NE)
+
+rho = 0.0
 
 @ti.kernel 
 def init_pos():
@@ -89,12 +92,37 @@ def collision():
         if positions[i][1] < 0.0:
             positions[i][1] = 0.0
 
-def update(h, maxIte):
+@ti.kernel
+def copy_positions():
+    for i in range(NV):
+        pre_positions[i] = positions[i]
+
+@ti.kernel
+def apply_primal_chebyshev(omega: ti.f32):
+    for i in range(NV):
+        positions[i] *= omega
+        positions[i] += (1 - omega) * pre_positions[i]
+
+def apply_chebyshev(ite):
+    omega = 1
+    if ite <= 10:
+        omega = 1.0
+    elif ite == 11:
+        omega = 2/(2-rho * rho)
+    else:
+        omega = 4/(4-rho*rho*omega)
+    apply_primal_chebyshev(omega)
+    return omega 
+
+def update(h, maxIte, use_primal_chebyshev):
     semi_euler(h)
     dual_residual = [None] * maxIte
-    for i in range(maxIte):
-        dual_residual[i] = compute_constraint_gradient()
+    for ite in range(maxIte):
+        copy_positions()
+        dual_residual[ite] = compute_constraint_gradient()
         solve_constraints()
+        if use_primal_chebyshev:
+            apply_chebyshev(ite)
         collision()
     update_v(h)
     return dual_residual
@@ -105,8 +133,14 @@ init_rest_len()
 gui = ti.GUI("Diplay tri mesh", res=(600,600))
 pause = False
 h = 0.01
-maxIte = 20
-residual_file = open("data/dual_residual.txt", "w")
+maxIte = 200
+
+use_primal_chebyshev = False
+dual_residual_file = "data/dual_residual.txt"
+if use_primal_chebyshev:
+    dual_residual_file = "data/chebyshev_dual_residual.txt"
+residual_file = open(dual_residual_file, "w")
+
 frame = 0
 while gui.running:
     gui.get_event(ti.GUI.PRESS)
@@ -116,7 +150,7 @@ while gui.running:
         pause = not pause
     
     if not pause:
-        dual_residual = update(h, maxIte)
+        dual_residual = update(h, maxIte, use_primal_chebyshev)
         for i in range(len(dual_residual)):
                 residual_file.write(f"{dual_residual[i]} \n")
 
@@ -133,7 +167,7 @@ while gui.running:
     gui.circles(static_points, radius=7, color=0xff0000)
     gui.show()
     frame += 1
-    if frame == 300:
+    if frame == 5:
         gui.running = False
-        
+
 residual_file.close()
