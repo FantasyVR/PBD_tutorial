@@ -1,0 +1,155 @@
+"""
+Schur complement with Multi-grid Jacobi solver
+"""
+import taichi as ti
+import numpy as np
+
+ti.init(arch=ti.gpu)
+
+n = 101
+pos = ti.Vector.field(n=2, dtype=ti.f64, shape=n)
+old_pos = ti.Vector.field(n=2, dtype=ti.f64, shape=n)
+edge = ti.Vector.field(n=2, dtype=ti.i32, shape=n - 1)
+rest_len = ti.field(dtype=ti.f64, shape=n - 1)
+inv_mass = ti.field(dtype=ti.f64, shape=n)
+vel = ti.Vector.field(n=2, dtype=ti.f64, shape=n)
+h, MaxIte = 0.01, 5  # time step size: 10ms, Maximu iteration number
+pause = False
+gradient = ti.Vector.field(n=2, dtype=ti.f64, shape=n - 1)
+constraint = ti.field(ti.f64, shape=n - 1)
+
+
+@ti.kernel
+def init_pos():
+    for i in pos:
+        pos[i] = ti.Vector([i * 0.1, 0]) + ti.Vector([0.4, 0.7])
+    for i in edge:
+        edge[i] = ti.Vector([i, i + 1])
+    for i in range(n):
+        inv_mass[i] = 1.0
+    inv_mass[0] = 0.0
+
+
+@ti.kernel
+def init_constrint():
+    for i in edge:
+        idx0, idx1 = edge[i]
+        rest_len[i] = (pos[idx0] - pos[idx1]).norm()
+
+
+@ti.kernel
+def seme_euler(h: ti.f64):
+    gravity = ti.Vector([0.0, -9.8])
+    for i in range(n):
+        if inv_mass[i] != 0.0:
+            vel[i] += h * gravity
+            old_pos[i] = pos[i]
+            pos[i] += vel[i] * h
+
+
+@ti.kernel
+def compute_gradient_constraint() -> ti.f64:
+    dual_residual = 0.0
+    for i in range(n - 1):
+        idx0, idx1 = edge[i]
+        dis = pos[idx0] - pos[idx1]
+        constraint[i] = dis.norm() - rest_len[i]
+        gradient[i] = dis.normalized()
+        dual_residual += constraint[i]**2
+    return dual_residual
+
+
+@ti.kernel
+def correct(delta_x: ti.ext_arr()):
+    for i in range(n-1):
+        pos[i+1] += ti.Vector([delta_x[2 * i + 0], delta_x[2 * i + 1]])
+
+
+def Jacobi_solve(A, b):
+    l = np.zeros(n - 1, np.float64)
+    for i in range(n - 1):
+        l[i] = b[i] / A[i, i]
+    return l
+
+
+def solve_constraints(use_amgx):
+    g = gradient.to_numpy()
+    G = np.zeros((2 * n, n - 1), np.float64)
+    e_indices = edge.to_numpy()
+    for i in range(n - 1):
+        idx0, idx1 = e_indices[i]
+        G[2 * idx0:2 * idx0 + 2, i] = g[i]
+        G[2 * idx1:2 * idx1 + 2, i] = -g[i]
+    G = G[2:,:]
+    A = np.transpose(G) @ G 
+    b = -constraint.to_numpy()
+    l = Jacobi_solve(A, b)
+    # AMGX
+    if use_amgx:
+        r = b - A @ l
+        nl2 = (n-1)//2
+        d = np.zeros(nl2, np.float64)
+        for i in range(nl2):
+            c = r[2*i] + r[2*i+1]
+            denomitor = 4 - 2 * np.dot(g[2*i], g[2*i+1])
+            d[i] = c / denomitor
+            l[2*i] +=   d[i]
+            l[2*i+1] +=  d[i]
+        #Post-smoothings
+        # r = b - A @ l
+        # x = Jacobi_solve(A, r)
+        # l += x
+
+    delta_x = 0.8 * G @ l
+    correct(delta_x)
+
+
+def solve(use_amgx):
+    dual_residual = compute_gradient_constraint()
+    solve_constraints(use_amgx)
+    return dual_residual
+
+
+@ti.kernel
+def update_vel(h: ti.f64):
+    for i in range(n):
+        if inv_mass[i] != 0.0:
+            vel[i] = (pos[i] - old_pos[i]) / h
+
+
+def update(h):
+    seme_euler(h)
+    f = open(f"data/SC_Fake_AMGX.txt", 'a')
+    for i in range(MaxIte):
+        # AMGX: 1, NO_AMGX: 0
+        dual_residual = solve(1)
+        f.write(f"{dual_residual}  \n")
+    update_vel(h)
+
+
+gui = ti.GUI("Display Rod", res=(500, 500))
+init_pos()
+init_constrint()
+frame = 0
+while gui.running:
+
+    gui.get_event(ti.GUI.PRESS)
+    if gui.is_pressed(ti.GUI.ESCAPE):
+        gui.running = False
+    elif gui.is_pressed(ti.GUI.SPACE):
+        pause = not pause
+
+    if not pause:
+        update(h)
+
+    positions = pos.to_numpy()
+    begin_points = positions[:-1]
+    end_points = positions[1:]
+    gui.lines(begin_points, end_points, radius=4, color=0x00FF00)
+    gui.circles(pos.to_numpy(), radius=5, color=0xFF0000)
+    # gui.show()
+    filename = f'./video/frame_{frame:05d}.png'  
+    frame += 1
+    if frame == 2000:
+        break
+    gui.show(filename)

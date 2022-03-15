@@ -76,9 +76,9 @@ def solve_constraints():
         invM0, invM1 = inv_mass[idx0], inv_mass[idx1]
         l = -constraint[i] / (invM0 + invM1)
         if invM0 != 0.0:
-            positions[idx0] += 0.9 * invM0 * l * gradient[2 * i + 0]
+            positions[idx0] += invM0 * l * gradient[2 * i + 0]
         if invM1 != 0.0:
-            positions[idx1] += 0.9 * invM1 * l * gradient[2 * i + 1]
+            positions[idx1] += invM1 * l * gradient[2 * i + 1]
 
 @ti.kernel
 def update_v(h: ti.f32):
@@ -167,7 +167,7 @@ while gui.running:
     gui.circles(static_points, radius=7, color=0xff0000)
     gui.show()
     frame += 1
-    if frame == 5:
-        gui.running = False
+    # if frame == 5:
+    #     gui.running = False
 
 residual_file.close()
